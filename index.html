@@ -38,6 +38,8 @@
   .fb.unread { border-left:4px solid var(--alert); background:#fff1f2; }
   .fb .meta { font-size:12px; color:var(--muted); margin-bottom:4px; }
   .fb .body { white-space:pre-wrap; }
+  .reply { margin:8px 0 0 10px; padding-left:10px; border-left:3px solid var(--line); font-size:14px; white-space:pre-wrap; }
+  .reply .meta { font-size:12px; color:var(--muted); }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -167,7 +169,7 @@ async function route() {
     $("agentWho").textContent = p.nom;
     show("agent");
     await loadMine();
-    timer = setInterval(loadMine, 30000);
+    timer = setInterval(() => loadMine(true), 30000);
   }
 }
 
@@ -286,7 +288,7 @@ async function loadPending() {
 
 async function loadHistory() {
   let q = db.from("feedbacks")
-    .select("id,message,lu,created_at,agent:profiles!feedbacks_agent_id_fkey(nom)")
+    .select("id,message,lu,created_at,agent:profiles!feedbacks_agent_id_fkey(nom),reponses(id,message,created_at,lu_admin)")
     .order("created_at", { ascending: false }).limit(100);
   if ($("filter").value) q = q.eq("agent_id", $("filter").value);
   const { data, error } = await q;
@@ -298,16 +300,50 @@ async function loadHistory() {
     td.textContent = error ? "Impossible de charger les feedbacks." : "Aucun feedback envoyé pour le moment.";
     return;
   }
+  let newReplies = 0;
   data.forEach(f => {
+    const reps = (f.reponses || []).slice().sort((a, b) => a.created_at.localeCompare(b.created_at));
+    const unreadReps = reps.filter(r => !r.lu_admin);
+    newReplies += unreadReps.length;
+
     const tr = tbody.insertRow();
     tr.insertCell().textContent = new Date(f.created_at).toLocaleString("fr-FR");
     tr.insertCell().textContent = f.agent?.nom || "Inconnu";
-    const m = tr.insertCell(); m.className = "m"; m.textContent = f.message;
+    const m = tr.insertCell();
+    m.className = "m";
+    m.textContent = f.message;
+    reps.forEach(r => {
+      const d = document.createElement("div");
+      d.className = "reply";
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = "Réponse · " + new Date(r.created_at).toLocaleString("fr-FR");
+      const txt = document.createElement("div");
+      txt.textContent = r.message;
+      d.append(meta, txt);
+      m.appendChild(d);
+    });
+
+    const st = tr.insertCell();
     const t = document.createElement("span");
     t.className = "tag " + (f.lu ? "read" : "unread");
     t.textContent = f.lu ? "Lu" : "Non lu";
-    tr.insertCell().appendChild(t);
+    st.appendChild(t);
+    if (unreadReps.length) {
+      const t2 = document.createElement("span");
+      t2.className = "tag unread";
+      t2.style.cssText = "display:inline-block;margin-top:4px";
+      t2.textContent = "Nouvelle réponse";
+      st.append(document.createElement("br"), t2);
+      tr.style.cursor = "pointer";
+      tr.title = "Cliquez pour marquer les réponses comme lues";
+      tr.addEventListener("click", async () => {
+        await db.from("reponses").update({ lu_admin: true }).eq("feedback_id", f.id).eq("lu_admin", false);
+        await loadHistory();
+      });
+    }
   });
+  document.title = newReplies ? `(${newReplies}) Espace admin` : "Feedbacks";
 }
 
 $("sendBtn").addEventListener("click", async () => {
@@ -360,10 +396,13 @@ $("addForm").addEventListener("submit", async e => {
 $("filter").addEventListener("change", loadHistory);
 
 /* ---------- Espace agent ---------- */
-async function loadMine() {
-  const { data, error } = await db.from("feedbacks").select("*").eq("agent_id", uid)
-    .order("created_at", { ascending: false }).limit(50);
+async function loadMine(auto = false) {
   const list = $("mine");
+  // Ne pas effacer une réponse en cours de saisie lors de l'actualisation automatique
+  if (auto && [...list.querySelectorAll("textarea")].some(t => t.value.trim() || t === document.activeElement)) return;
+
+  const { data, error } = await db.from("feedbacks").select("*,reponses(id,message,created_at)").eq("agent_id", uid)
+    .order("created_at", { ascending: false }).limit(50);
   list.replaceChildren();
   if (error) { list.textContent = "Impossible de charger vos feedbacks."; return; }
   if (!data.length) { list.textContent = "Aucun feedback pour le moment."; return; }
@@ -382,13 +421,55 @@ async function loadMine() {
     body.className = "body";
     body.textContent = f.message;
     div.append(meta, body);
+
+    (f.reponses || []).slice().sort((a, b) => a.created_at.localeCompare(b.created_at)).forEach(r => {
+      const d = document.createElement("div");
+      d.className = "reply";
+      const rm = document.createElement("div");
+      rm.className = "meta";
+      rm.textContent = "Votre réponse · " + new Date(r.created_at).toLocaleString("fr-FR");
+      const rt = document.createElement("div");
+      rt.textContent = r.message;
+      d.append(rm, rt);
+      div.appendChild(d);
+    });
+
+    // Zone de réponse
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "ghost";
+    open.style.marginTop = "8px";
+    open.textContent = "Répondre";
+    const box = document.createElement("div");
+    box.hidden = true;
+    box.style.marginTop = "8px";
+    const ta = document.createElement("textarea");
+    ta.placeholder = "Votre réponse...";
+    const send = document.createElement("button");
+    send.type = "button";
+    send.textContent = "Envoyer la réponse";
+    box.append(ta, send);
+    open.addEventListener("click", ev => { ev.stopPropagation(); box.hidden = !box.hidden; if (!box.hidden) ta.focus(); });
+    box.addEventListener("click", ev => ev.stopPropagation());
+    send.addEventListener("click", async ev => {
+      ev.stopPropagation();
+      const message = ta.value.trim();
+      if (!message) return;
+      send.disabled = true;
+      const { error: err } = await db.from("reponses").insert({ feedback_id: f.id, auteur_id: uid, message });
+      if (err) { alert("Envoi impossible : " + err.message); send.disabled = false; return; }
+      ta.value = "";
+      await loadMine();
+    });
+    div.append(open, box);
+
     if (!f.lu) {
       const markRead = async () => {
         await db.from("feedbacks").update({ lu: true }).eq("id", f.id);
         await loadMine();
       };
       div.addEventListener("click", markRead, { once: true });
-      div.addEventListener("keydown", e => { if (e.key === "Enter") markRead(); });
+      div.addEventListener("keydown", e => { if (e.target === div && e.key === "Enter") markRead(); });
     }
     list.appendChild(div);
   });
