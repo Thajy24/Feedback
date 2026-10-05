@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Espace admin · Feedbacks</title>
+<title>Feedbacks</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root { --ink:#1e293b; --muted:#64748b; --line:#e2e8f0; --bg:#f8fafc; --accent:#2563eb; --alert:#e11d48; }
-  * { box-sizing: border-box; }
+  * { box-sizing:border-box; }
   body { margin:0; font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
   main { max-width:860px; margin:0 auto; padding:24px 16px 48px; }
   h1 { font-size:22px; margin:0 0 4px; }
@@ -17,46 +17,66 @@
   input, select, textarea, button { font:inherit; width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:6px; margin-bottom:12px; }
   textarea { min-height:100px; resize:vertical; }
   button { background:var(--accent); color:#fff; border:0; cursor:pointer; font-weight:600; }
-  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  button:disabled { opacity:.6; cursor:default; }
   button.ghost { background:none; color:var(--muted); width:auto; padding:0; margin:0; font-weight:400; text-decoration:underline; }
-  .top { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
-  .msg { min-height:20px; font-size:13px; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  .top { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:8px; }
+  .muted { color:var(--muted); }
+  .msg { min-height:20px; font-size:13px; margin:0; }
   .err { color:var(--alert); } .ok { color:#15803d; }
   #login { max-width:360px; margin:12vh auto 0; }
   .tablewrap { overflow-x:auto; }
-  table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:8px; }
+  table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); }
   th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
   th { font-size:13px; color:var(--muted); font-weight:600; }
   td.m { white-space:pre-wrap; min-width:220px; }
   .tag { font-size:12px; padding:2px 8px; border-radius:99px; white-space:nowrap; }
   .tag.unread { background:#ffe4e6; color:var(--alert); }
   .tag.read { background:#dcfce7; color:#15803d; }
+  #agent { max-width:640px; }
+  .fb { background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:10px; cursor:pointer; }
+  .fb.unread { border-left:4px solid var(--alert); background:#fff1f2; }
+  .fb .meta { font-size:12px; color:var(--muted); margin-bottom:4px; }
+  .fb .body { white-space:pre-wrap; }
   [hidden] { display:none !important; }
 </style>
 </head>
 <body>
 <main>
-  <section id="login" class="card" hidden>
-    <h1>Espace admin</h1>
-    <p style="color:var(--muted);margin:0 0 16px">Connectez-vous pour envoyer des feedbacks aux agents.</p>
-    <label for="email">Email</label>
-    <input id="email" type="email" autocomplete="username">
-    <label for="password">Mot de passe</label>
-    <input id="password" type="password" autocomplete="current-password">
-    <button id="loginBtn">Se connecter</button>
-    <div id="loginErr" class="msg err"></div>
-  </section>
 
-  <section id="app" hidden>
+  <!-- CONNEXION -->
+  <form id="login" class="card" hidden>
+    <h1 id="loginTitle">Connexion</h1>
+    <p class="muted" style="margin:0 0 16px">Accédez à votre espace feedbacks.</p>
+    <div id="nomRow" hidden>
+      <label for="nom">Nom complet</label>
+      <input id="nom" type="text" autocomplete="name">
+    </div>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" required>
+    <label for="password">Mot de passe</label>
+    <input id="password" type="password" autocomplete="current-password" minlength="6" required>
+    <button id="loginBtn" type="submit">Se connecter</button>
+    <p id="loginErr" class="msg err" role="alert"></p>
+    <button type="button" id="modeBtn" class="ghost">Pas de compte ? Créer un compte</button>
+  </form>
+
+  <!-- ESPACE ADMIN -->
+  <section id="admin" hidden>
     <div class="top">
-      <div><h1>Feedbacks</h1><span id="who" style="color:var(--muted)"></span></div>
-      <button id="logoutBtn" class="ghost">Se déconnecter</button>
+      <div><h1>Espace admin</h1><span id="adminWho" class="muted"></span></div>
+      <button class="ghost logout">Se déconnecter</button>
+    </div>
+
+    <div id="pendingBox" hidden>
+      <h2>Comptes en attente de validation</h2>
+      <div id="pending" class="card"></div>
     </div>
 
     <h2>Envoyer un feedback</h2>
     <div class="card">
-      <label for="agent">Destinataire</label>
-      <select id="agent"></select>
+      <label for="target">Destinataire</label>
+      <select id="target"></select>
       <label for="message">Message</label>
       <textarea id="message"></textarea>
       <button id="sendBtn">Envoyer le feedback</button>
@@ -73,6 +93,16 @@
       </table>
     </div>
   </section>
+
+  <!-- ESPACE AGENT -->
+  <section id="agent" hidden>
+    <div class="top">
+      <div><h1>Mes feedbacks</h1><span id="agentWho" class="muted"></span></div>
+      <button class="ghost logout">Se déconnecter</button>
+    </div>
+    <div id="mine"></div>
+  </section>
+
 </main>
 
 <script>
@@ -84,42 +114,132 @@ const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const $ = id => document.getElementById(id);
 let uid = null, agents = [], timer = null;
 
-function show(which) {
-  $("login").hidden = which !== "login";
-  $("app").hidden = which !== "app";
+function show(name) {
+  ["login", "admin", "agent"].forEach(n => { $(n).hidden = n !== name; });
 }
-
 function option(value, text) {
   const o = document.createElement("option");
   o.value = value; o.textContent = text;
   return o;
 }
 
-async function init() {
+/* ---------- Connexion et aiguillage selon le rôle ---------- */
+async function route() {
+  clearInterval(timer);
+  document.title = "Feedbacks";
   const { data: { session } } = await db.auth.getSession();
   if (!session) return show("login");
 
-  const { data: p } = await db.from("profiles").select("nom,role").eq("id", session.user.id).single();
-  if (!p || p.role !== "admin") {
+  const { data: p } = await db.from("profiles").select("nom,role,actif").eq("id", session.user.id).single();
+  if (!p) {
     await db.auth.signOut();
     show("login");
-    $("loginErr").textContent = "Ce compte n'a pas accès à l'espace admin.";
+    $("loginErr").textContent = "Ce compte n'a pas de profil. Contactez l'administrateur.";
     return;
   }
   uid = session.user.id;
-  $("who").textContent = p.nom;
-  show("app");
-  await loadAgents();
-  await loadHistory();
-  clearInterval(timer);
-  timer = setInterval(loadHistory, 30000);
+
+  if (p.role === "admin") {
+    $("adminWho").textContent = p.nom;
+    show("admin");
+    await loadAgents();
+    await loadPending();
+    await loadHistory();
+    timer = setInterval(() => { loadHistory(); loadPending(); }, 30000);
+  } else if (!p.actif) {
+    $("agentWho").textContent = p.nom;
+    show("agent");
+    $("mine").textContent = "Votre compte est en attente de validation par l'administrateur.";
+    timer = setInterval(route, 30000);
+  } else {
+    $("agentWho").textContent = p.nom;
+    show("agent");
+    await loadMine();
+    timer = setInterval(loadMine, 30000);
+  }
 }
 
+let signup = false;
+function setMode(on) {
+  signup = on;
+  $("nomRow").hidden = !on;
+  $("nom").required = on;
+  $("loginTitle").textContent = on ? "Créer un compte" : "Connexion";
+  $("loginBtn").textContent = on ? "Créer mon compte" : "Se connecter";
+  $("modeBtn").textContent = on ? "Déjà un compte ? Se connecter" : "Pas de compte ? Créer un compte";
+  $("password").autocomplete = on ? "new-password" : "current-password";
+  $("loginErr").textContent = "";
+}
+$("modeBtn").addEventListener("click", () => setMode(!signup));
+
+$("login").addEventListener("submit", async e => {
+  e.preventDefault();
+  const err = $("loginErr");
+  err.className = "msg err";
+  err.textContent = "";
+  $("loginBtn").disabled = true;
+  const email = $("email").value.trim(), password = $("password").value;
+
+  if (signup) {
+    const r = await db.auth.signUp({ email, password, options: { data: { nom: $("nom").value.trim() } } });
+    $("loginBtn").disabled = false;
+    if (r.error) {
+      err.textContent = /registered|already/i.test(r.error.message)
+        ? "Cet email a déjà un compte."
+        : "Création impossible : " + r.error.message;
+      return;
+    }
+    if (!r.data.session) {
+      setMode(false);
+      err.className = "msg ok";
+      err.textContent = "Compte créé. Confirmez votre email, puis connectez-vous.";
+      return;
+    }
+  } else {
+    const { error } = await db.auth.signInWithPassword({ email, password });
+    $("loginBtn").disabled = false;
+    if (error) { err.textContent = "Email ou mot de passe incorrect."; return; }
+  }
+  $("password").value = "";
+  await route();
+});
+
+document.querySelectorAll(".logout").forEach(b => b.addEventListener("click", async () => {
+  clearInterval(timer);
+  await db.auth.signOut();
+  show("login");
+  document.title = "Feedbacks";
+}));
+
+/* ---------- Espace admin ---------- */
 async function loadAgents() {
-  const { data } = await db.from("profiles").select("id,nom").eq("role", "agent").order("nom");
+  const { data } = await db.from("profiles").select("id,nom").eq("role", "agent").eq("actif", true).order("nom");
   agents = data || [];
-  $("agent").replaceChildren(option("all", "Tous les agents"), ...agents.map(a => option(a.id, a.nom)));
+  $("target").replaceChildren(option("all", "Tous les agents"), ...agents.map(a => option(a.id, a.nom)));
   $("filter").replaceChildren(option("", "Tous les agents"), ...agents.map(a => option(a.id, a.nom)));
+}
+
+async function loadPending() {
+  const { data } = await db.from("profiles").select("id,nom").eq("role", "agent").eq("actif", false).order("nom");
+  const list = $("pending");
+  list.replaceChildren();
+  $("pendingBox").hidden = !data || !data.length;
+  (data || []).forEach(p => {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0";
+    const n = document.createElement("span");
+    n.textContent = p.nom;
+    const b = document.createElement("button");
+    b.textContent = "Activer";
+    b.style.cssText = "width:auto;margin:0;padding:6px 14px";
+    b.addEventListener("click", async () => {
+      await db.from("profiles").update({ actif: true }).eq("id", p.id);
+      await loadAgents();
+      await loadPending();
+    });
+    row.append(n, b);
+    list.appendChild(row);
+  });
 }
 
 async function loadHistory() {
@@ -131,7 +251,7 @@ async function loadHistory() {
   const tbody = $("rows");
   tbody.replaceChildren();
   if (error || !data.length) {
-    const tr = tbody.insertRow(), td = tr.insertCell();
+    const td = tbody.insertRow().insertCell();
     td.colSpan = 4;
     td.textContent = error ? "Impossible de charger les feedbacks." : "Aucun feedback envoyé pour le moment.";
     return;
@@ -141,32 +261,19 @@ async function loadHistory() {
     tr.insertCell().textContent = new Date(f.created_at).toLocaleString("fr-FR");
     tr.insertCell().textContent = f.agent?.nom || "Inconnu";
     const m = tr.insertCell(); m.className = "m"; m.textContent = f.message;
-    const s = tr.insertCell(), t = document.createElement("span");
+    const t = document.createElement("span");
     t.className = "tag " + (f.lu ? "read" : "unread");
     t.textContent = f.lu ? "Lu" : "Non lu";
-    s.appendChild(t);
+    tr.insertCell().appendChild(t);
   });
 }
-
-$("loginBtn").addEventListener("click", async () => {
-  $("loginErr").textContent = "";
-  const { error } = await db.auth.signInWithPassword({ email: $("email").value.trim(), password: $("password").value });
-  if (error) { $("loginErr").textContent = "Email ou mot de passe incorrect."; return; }
-  await init();
-});
-
-$("logoutBtn").addEventListener("click", async () => {
-  clearInterval(timer);
-  await db.auth.signOut();
-  show("login");
-});
 
 $("sendBtn").addEventListener("click", async () => {
   const message = $("message").value.trim();
   const out = $("sendMsg");
   out.className = "msg";
   if (!message) { out.className = "msg err"; out.textContent = "Écrivez un message avant d'envoyer."; return; }
-  const ids = $("agent").value === "all" ? agents.map(a => a.id) : [$("agent").value];
+  const ids = $("target").value === "all" ? agents.map(a => a.id) : [$("target").value];
   const { error } = await db.from("feedbacks").insert(ids.map(id => ({ agent_id: id, auteur_id: uid, message })));
   if (error) { out.className = "msg err"; out.textContent = "Échec de l'envoi : " + error.message; return; }
   $("message").value = "";
@@ -176,7 +283,43 @@ $("sendBtn").addEventListener("click", async () => {
 });
 
 $("filter").addEventListener("change", loadHistory);
-init();
+
+/* ---------- Espace agent ---------- */
+async function loadMine() {
+  const { data, error } = await db.from("feedbacks").select("*").eq("agent_id", uid)
+    .order("created_at", { ascending: false }).limit(50);
+  const list = $("mine");
+  list.replaceChildren();
+  if (error) { list.textContent = "Impossible de charger vos feedbacks."; return; }
+  if (!data.length) { list.textContent = "Aucun feedback pour le moment."; return; }
+
+  const unread = data.filter(f => !f.lu).length;
+  document.title = unread ? `(${unread}) Mes feedbacks` : "Mes feedbacks";
+
+  data.forEach(f => {
+    const div = document.createElement("div");
+    div.className = "fb" + (f.lu ? "" : " unread");
+    div.tabIndex = 0;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = new Date(f.created_at).toLocaleString("fr-FR") + (f.lu ? "" : " · cliquez pour marquer comme lu");
+    const body = document.createElement("div");
+    body.className = "body";
+    body.textContent = f.message;
+    div.append(meta, body);
+    if (!f.lu) {
+      const markRead = async () => {
+        await db.from("feedbacks").update({ lu: true }).eq("id", f.id);
+        await loadMine();
+      };
+      div.addEventListener("click", markRead, { once: true });
+      div.addEventListener("keydown", e => { if (e.key === "Enter") markRead(); });
+    }
+    list.appendChild(div);
+  });
+}
+
+route();
 </script>
 </body>
 </html>
