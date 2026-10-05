@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Espace admin · Feedbacks</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root { --ink:#1e293b; --muted:#64748b; --line:#e2e8f0; --bg:#f8fafc; --accent:#2563eb; --alert:#e11d48; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
+  main { max-width:860px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:16px; margin:28px 0 10px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:8px; padding:16px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:0 0 4px; }
+  input, select, textarea, button { font:inherit; width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:6px; margin-bottom:12px; }
+  textarea { min-height:100px; resize:vertical; }
+  button { background:var(--accent); color:#fff; border:0; cursor:pointer; font-weight:600; }
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  button.ghost { background:none; color:var(--muted); width:auto; padding:0; margin:0; font-weight:400; text-decoration:underline; }
+  .top { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+  .msg { min-height:20px; font-size:13px; }
+  .err { color:var(--alert); } .ok { color:#15803d; }
+  #login { max-width:360px; margin:12vh auto 0; }
+  .tablewrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:8px; }
+  th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:13px; color:var(--muted); font-weight:600; }
+  td.m { white-space:pre-wrap; min-width:220px; }
+  .tag { font-size:12px; padding:2px 8px; border-radius:99px; white-space:nowrap; }
+  .tag.unread { background:#ffe4e6; color:var(--alert); }
+  .tag.read { background:#dcfce7; color:#15803d; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <section id="login" class="card" hidden>
+    <h1>Espace admin</h1>
+    <p style="color:var(--muted);margin:0 0 16px">Connectez-vous pour envoyer des feedbacks aux agents.</p>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username">
+    <label for="password">Mot de passe</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <button id="loginBtn">Se connecter</button>
+    <div id="loginErr" class="msg err"></div>
+  </section>
+
+  <section id="app" hidden>
+    <div class="top">
+      <div><h1>Feedbacks</h1><span id="who" style="color:var(--muted)"></span></div>
+      <button id="logoutBtn" class="ghost">Se déconnecter</button>
+    </div>
+
+    <h2>Envoyer un feedback</h2>
+    <div class="card">
+      <label for="agent">Destinataire</label>
+      <select id="agent"></select>
+      <label for="message">Message</label>
+      <textarea id="message"></textarea>
+      <button id="sendBtn">Envoyer le feedback</button>
+      <div id="sendMsg" class="msg" role="status"></div>
+    </div>
+
+    <h2>Feedbacks envoyés</h2>
+    <label for="filter">Filtrer par agent</label>
+    <select id="filter"></select>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Date</th><th>Agent</th><th>Message</th><th>Statut</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+// À remplacer : Supabase > Project Settings > API (clé "anon" uniquement)
+const SUPABASE_URL = "https://VOTRE-PROJET.supabase.co";
+const SUPABASE_KEY = "VOTRE_CLE_ANON_PUBLIQUE";
+
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const $ = id => document.getElementById(id);
+let uid = null, agents = [], timer = null;
+
+function show(which) {
+  $("login").hidden = which !== "login";
+  $("app").hidden = which !== "app";
+}
+
+function option(value, text) {
+  const o = document.createElement("option");
+  o.value = value; o.textContent = text;
+  return o;
+}
+
+async function init() {
+  const { data: { session } } = await db.auth.getSession();
+  if (!session) return show("login");
+
+  const { data: p } = await db.from("profiles").select("nom,role").eq("id", session.user.id).single();
+  if (!p || p.role !== "admin") {
+    await db.auth.signOut();
+    show("login");
+    $("loginErr").textContent = "Ce compte n'a pas accès à l'espace admin.";
+    return;
+  }
+  uid = session.user.id;
+  $("who").textContent = p.nom;
+  show("app");
+  await loadAgents();
+  await loadHistory();
+  clearInterval(timer);
+  timer = setInterval(loadHistory, 30000);
+}
+
+async function loadAgents() {
+  const { data } = await db.from("profiles").select("id,nom").eq("role", "agent").order("nom");
+  agents = data || [];
+  $("agent").replaceChildren(option("all", "Tous les agents"), ...agents.map(a => option(a.id, a.nom)));
+  $("filter").replaceChildren(option("", "Tous les agents"), ...agents.map(a => option(a.id, a.nom)));
+}
+
+async function loadHistory() {
+  let q = db.from("feedbacks")
+    .select("id,message,lu,created_at,agent:profiles!feedbacks_agent_id_fkey(nom)")
+    .order("created_at", { ascending: false }).limit(100);
+  if ($("filter").value) q = q.eq("agent_id", $("filter").value);
+  const { data, error } = await q;
+  const tbody = $("rows");
+  tbody.replaceChildren();
+  if (error || !data.length) {
+    const tr = tbody.insertRow(), td = tr.insertCell();
+    td.colSpan = 4;
+    td.textContent = error ? "Impossible de charger les feedbacks." : "Aucun feedback envoyé pour le moment.";
+    return;
+  }
+  data.forEach(f => {
+    const tr = tbody.insertRow();
+    tr.insertCell().textContent = new Date(f.created_at).toLocaleString("fr-FR");
+    tr.insertCell().textContent = f.agent?.nom || "Inconnu";
+    const m = tr.insertCell(); m.className = "m"; m.textContent = f.message;
+    const s = tr.insertCell(), t = document.createElement("span");
+    t.className = "tag " + (f.lu ? "read" : "unread");
+    t.textContent = f.lu ? "Lu" : "Non lu";
+    s.appendChild(t);
+  });
+}
+
+$("loginBtn").addEventListener("click", async () => {
+  $("loginErr").textContent = "";
+  const { error } = await db.auth.signInWithPassword({ email: $("email").value.trim(), password: $("password").value });
+  if (error) { $("loginErr").textContent = "Email ou mot de passe incorrect."; return; }
+  await init();
+});
+
+$("logoutBtn").addEventListener("click", async () => {
+  clearInterval(timer);
+  await db.auth.signOut();
+  show("login");
+});
+
+$("sendBtn").addEventListener("click", async () => {
+  const message = $("message").value.trim();
+  const out = $("sendMsg");
+  out.className = "msg";
+  if (!message) { out.className = "msg err"; out.textContent = "Écrivez un message avant d'envoyer."; return; }
+  const ids = $("agent").value === "all" ? agents.map(a => a.id) : [$("agent").value];
+  const { error } = await db.from("feedbacks").insert(ids.map(id => ({ agent_id: id, auteur_id: uid, message })));
+  if (error) { out.className = "msg err"; out.textContent = "Échec de l'envoi : " + error.message; return; }
+  $("message").value = "";
+  out.className = "msg ok";
+  out.textContent = ids.length > 1 ? `Feedback envoyé à ${ids.length} agents.` : "Feedback envoyé.";
+  await loadHistory();
+});
+
+$("filter").addEventListener("change", loadHistory);
+init();
+</script>
+</body>
+</html>
