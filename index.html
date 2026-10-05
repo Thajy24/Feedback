@@ -68,6 +68,18 @@
       <button class="ghost logout">Se déconnecter</button>
     </div>
 
+    <h2>Ajouter un agent</h2>
+    <form id="addForm" class="card">
+      <label for="newNom">Nom complet</label>
+      <input id="newNom" type="text" required>
+      <label for="newEmail">Email</label>
+      <input id="newEmail" type="email" required>
+      <label for="newPass">Mot de passe (6 caractères minimum)</label>
+      <input id="newPass" type="text" minlength="6" autocomplete="off" required>
+      <button id="addBtn" type="submit">Créer l'agent</button>
+      <p id="addMsg" class="msg" role="status"></p>
+    </form>
+
     <div id="pendingBox" hidden>
       <h2>Agents</h2>
       <div id="pending" class="card"></div>
@@ -310,6 +322,39 @@ $("sendBtn").addEventListener("click", async () => {
   out.className = "msg ok";
   out.textContent = ids.length > 1 ? `Feedback envoyé à ${ids.length} agents.` : "Feedback envoyé.";
   await loadHistory();
+});
+
+/* ---------- Ajout d'un agent par l'admin ---------- */
+$("addForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const out = $("addMsg");
+  const fail = text => { out.className = "msg err"; out.textContent = text; $("addBtn").disabled = false; };
+  out.className = "msg";
+  out.textContent = "";
+  $("addBtn").disabled = true;
+
+  // Client temporaire sans session : la connexion de l'admin n'est pas touchée
+  const tmp = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: "tmp-signup" }
+  });
+  const nom = $("newNom").value.trim(), email = $("newEmail").value.trim();
+  const { data, error } = await tmp.auth.signUp({ email, password: $("newPass").value, options: { data: { nom } } });
+
+  if (error) {
+    return fail(/registered|already/i.test(error.message) ? "Cet email a déjà un compte." : "Création impossible : " + error.message);
+  }
+  if (!data.user || (data.user.identities && data.user.identities.length === 0)) {
+    return fail("Cet email a déjà un compte.");
+  }
+  const { error: upErr } = await db.from("profiles").update({ actif: true }).eq("id", data.user.id);
+  if (upErr) return fail("Compte créé, mais l'activation a échoué : " + upErr.message);
+
+  e.target.reset();
+  out.className = "msg ok";
+  out.textContent = `Agent créé et activé (${email}). Transmettez-lui son email et son mot de passe.`;
+  $("addBtn").disabled = false;
+  await loadAgents();
+  await loadPending();
 });
 
 $("filter").addEventListener("change", loadHistory);
