@@ -69,7 +69,7 @@
     </div>
 
     <div id="pendingBox" hidden>
-      <h2>Comptes en attente de validation</h2>
+      <h2>Agents</h2>
       <div id="pending" class="card"></div>
     </div>
 
@@ -220,24 +220,54 @@ async function loadAgents() {
 }
 
 async function loadPending() {
-  const { data } = await db.from("profiles").select("id,nom").eq("role", "agent").eq("actif", false).order("nom");
+  const { data } = await db.from("profiles").select("id,nom,actif").eq("role", "agent").order("actif").order("nom");
   const list = $("pending");
   list.replaceChildren();
   $("pendingBox").hidden = !data || !data.length;
   (data || []).forEach(p => {
     const row = document.createElement("div");
-    row.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0";
+    row.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0;flex-wrap:wrap";
+
+    const left = document.createElement("div");
+    left.style.cssText = "display:flex;gap:10px;align-items:center";
     const n = document.createElement("span");
     n.textContent = p.nom;
-    const b = document.createElement("button");
-    b.textContent = "Activer";
-    b.style.cssText = "width:auto;margin:0;padding:6px 14px";
-    b.addEventListener("click", async () => {
-      await db.from("profiles").update({ actif: true }).eq("id", p.id);
+    const tag = document.createElement("span");
+    tag.className = "tag " + (p.actif ? "read" : "unread");
+    tag.textContent = p.actif ? "Actif" : "En attente";
+    left.append(n, tag);
+
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;gap:8px";
+    const small = "width:auto;margin:0;padding:6px 14px";
+
+    if (!p.actif) {
+      const ok = document.createElement("button");
+      ok.textContent = "Activer";
+      ok.style.cssText = small;
+      ok.addEventListener("click", async () => {
+        await db.from("profiles").update({ actif: true }).eq("id", p.id);
+        await loadAgents();
+        await loadPending();
+      });
+      actions.appendChild(ok);
+    }
+
+    const del = document.createElement("button");
+    del.textContent = "Supprimer";
+    del.style.cssText = small + ";background:var(--alert)";
+    del.addEventListener("click", async () => {
+      if (!confirm(`Supprimer ${p.nom} ?\nSon compte et tous ses feedbacks seront effacés définitivement.`)) return;
+      del.disabled = true;
+      const { error } = await db.rpc("delete_agent", { target: p.id });
+      if (error) { alert("Suppression impossible : " + error.message); del.disabled = false; return; }
       await loadAgents();
       await loadPending();
+      await loadHistory();
     });
-    row.append(n, b);
+    actions.appendChild(del);
+
+    row.append(left, actions);
     list.appendChild(row);
   });
 }
