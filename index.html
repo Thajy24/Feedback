@@ -6,7 +6,7 @@
 <title>Feedbacks</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
-  :root { --ink:#1e293b; --muted:#64748b; --line:#e2e8f0; --bg:#f8fafc; --accent:#2563eb; --alert:#e11d48; }
+  :root { --ink:#1e293b; --muted:#64748b; --line:#e2e8f0; --bg:#f8fafc; --accent:#2563eb; --alert:#e11d48; --recv:#e5e7eb; }
   * { box-sizing:border-box; }
   body { margin:0; font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; color:var(--ink); background:var(--bg); }
   main { max-width:860px; margin:0 auto; padding:24px 16px 48px; }
@@ -15,6 +15,7 @@
   .card { background:#fff; border:1px solid var(--line); border-radius:8px; padding:16px; }
   label { display:block; font-size:13px; color:var(--muted); margin:0 0 4px; }
   input, select, textarea, button { font:inherit; width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:6px; margin-bottom:12px; }
+  input[type=file] { padding:6px; background:#fff; }
   textarea { min-height:100px; resize:vertical; }
   button { background:var(--accent); color:#fff; border:0; cursor:pointer; font-weight:600; }
   button:disabled { opacity:.6; cursor:default; }
@@ -29,17 +30,27 @@
   table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); }
   th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
   th { font-size:13px; color:var(--muted); font-weight:600; }
-  td.m { white-space:pre-wrap; min-width:220px; }
+  td.m { min-width:240px; }
   .tag { font-size:12px; padding:2px 8px; border-radius:99px; white-space:nowrap; }
   .tag.unread { background:#ffe4e6; color:var(--alert); }
   .tag.read { background:#dcfce7; color:#15803d; }
+  .tag.model { background:#dbeafe; color:#1d4ed8; }
   #agent { max-width:640px; }
   .fb { background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:10px; cursor:pointer; }
   .fb.unread { border-left:4px solid var(--alert); background:#fff1f2; }
-  .fb .meta { font-size:12px; color:var(--muted); margin-bottom:4px; }
-  .fb .body { white-space:pre-wrap; }
-  .reply { margin:8px 0 0 10px; padding-left:10px; border-left:3px solid var(--line); font-size:14px; white-space:pre-wrap; }
-  .reply .meta { font-size:12px; color:var(--muted); }
+  .fb > .meta { font-size:12px; color:var(--muted); margin-bottom:2px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+
+  /* Bulles : envoyé = bleu (à droite), reçu = gris (à gauche) */
+  .bubble { max-width:85%; width:fit-content; padding:8px 12px; border-radius:12px; margin-top:8px; }
+  .bubble .meta { font-size:11px; opacity:.75; margin-bottom:2px; }
+  .bubble .txt { white-space:pre-wrap; overflow-wrap:anywhere; }
+  .bubble.sent { background:var(--accent); color:#fff; margin-left:auto; border-bottom-right-radius:3px; }
+  .bubble.recv { background:var(--recv); color:var(--ink); margin-right:auto; border-bottom-left-radius:3px; }
+  .bubble button.del { display:block; background:none; border:0; color:inherit; opacity:.75; text-decoration:underline; width:auto; padding:0; margin:4px 0 0; font-size:11px; font-weight:400; }
+  .bubble img { display:block; max-width:100%; max-height:260px; margin-top:6px; border-radius:8px; }
+  .legend { font-size:12px; color:var(--muted); display:flex; gap:12px; margin:0 0 8px; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+  .preview { max-width:160px; max-height:120px; border-radius:6px; margin:0 0 12px; display:block; }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -76,11 +87,14 @@
       <input id="newNom" type="text" required>
       <label for="newEmail">Email</label>
       <input id="newEmail" type="email" required>
+      <label for="newModele">Modèle (optionnel)</label>
+      <input id="newModele" type="text" list="modeles" autocomplete="off">
       <label for="newPass">Mot de passe (6 caractères minimum)</label>
       <input id="newPass" type="text" minlength="6" autocomplete="off" required>
       <button id="addBtn" type="submit">Créer l'agent</button>
       <p id="addMsg" class="msg" role="status"></p>
     </form>
+    <datalist id="modeles"></datalist>
 
     <div id="pendingBox" hidden>
       <h2>Agents</h2>
@@ -89,15 +103,19 @@
 
     <h2>Envoyer un feedback</h2>
     <div class="card">
-      <label for="target">Destinataire</label>
+      <label for="target">Destinataire (un agent, un modèle ou tous)</label>
       <select id="target"></select>
       <label for="message">Message</label>
       <textarea id="message"></textarea>
+      <label for="adminImg">Image (optionnel)</label>
+      <input id="adminImg" type="file" accept="image/*">
+      <img id="adminPrev" class="preview" alt="Aperçu" hidden>
       <button id="sendBtn">Envoyer le feedback</button>
       <div id="sendMsg" class="msg" role="status"></div>
     </div>
 
     <h2>Feedbacks envoyés</h2>
+    <p class="legend"><span><i class="dot" style="background:var(--accent)"></i>Envoyé par vous</span><span><i class="dot" style="background:var(--recv)"></i>Réponse de l'agent</span></p>
     <label for="filter">Filtrer par agent</label>
     <select id="filter"></select>
     <div class="tablewrap">
@@ -114,15 +132,17 @@
       <div><h1>Mes feedbacks</h1><span id="agentWho" class="muted"></span></div>
       <button class="ghost logout">Se déconnecter</button>
     </div>
+    <p class="legend"><span><i class="dot" style="background:var(--recv)"></i>Reçu</span><span><i class="dot" style="background:var(--accent)"></i>Envoyé par vous</span></p>
     <div id="mine"></div>
   </section>
 
 </main>
 
 <script>
-// À remplacer : Supabase > Project Settings > API (clé "anon" uniquement)
 const SUPABASE_URL = "https://mzjiyusbgtslfzchoykf.supabase.co";
 const SUPABASE_KEY = "sb_publishable_6JGumr_7n73O3U6MjRdgkw_5mZH46cc";
+const BUCKET = "feedback-images";
+const MAX_IMG = 5 * 1024 * 1024; // 5 Mo
 
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const $ = id => document.getElementById(id);
@@ -136,6 +156,64 @@ function option(value, text) {
   o.value = value; o.textContent = text;
   return o;
 }
+function group(label, opts) {
+  const g = document.createElement("optgroup");
+  g.label = label;
+  g.append(...opts);
+  return g;
+}
+const fmt = d => new Date(d).toLocaleString("fr-FR");
+
+/* ---------- Images ---------- */
+async function uploadImage(file) {
+  if (!file) return null;
+  if (!file.type.startsWith("image/")) throw new Error("Le fichier doit être une image.");
+  if (file.size > MAX_IMG) throw new Error("Image trop lourde (5 Mo maximum).");
+  const ext = (file.name.split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const path = `${uid}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext || "png"}`;
+  const { error } = await db.storage.from(BUCKET).upload(path, file, { contentType: file.type });
+  if (error) throw new Error(error.message);
+  return db.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+}
+function bindPreview(input, img) {
+  input.addEventListener("change", () => {
+    const f = input.files[0];
+    if (img.src && img.src.startsWith("blob:")) URL.revokeObjectURL(img.src);
+    if (f && f.type.startsWith("image/")) { img.src = URL.createObjectURL(f); img.hidden = false; }
+    else { img.removeAttribute("src"); img.hidden = true; }
+  });
+}
+function clearFile(input, img) {
+  input.value = "";
+  img.removeAttribute("src");
+  img.hidden = true;
+}
+
+/* Bulle de message : kind = "sent" (bleu) ou "recv" (gris) */
+function bubble(kind, metaText, text, imageUrl) {
+  const b = document.createElement("div");
+  b.className = "bubble " + kind;
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = metaText;
+  b.appendChild(meta);
+  if (text) {
+    const t = document.createElement("div");
+    t.className = "txt";
+    t.textContent = text;
+    b.appendChild(t);
+  }
+  if (imageUrl) {
+    const a = document.createElement("a");
+    a.href = imageUrl; a.target = "_blank"; a.rel = "noopener";
+    a.addEventListener("click", e => e.stopPropagation());
+    const img = document.createElement("img");
+    img.src = imageUrl; img.alt = "Image jointe"; img.loading = "lazy";
+    a.appendChild(img);
+    b.appendChild(a);
+  }
+  return b;
+}
 
 /* ---------- Connexion et aiguillage selon le rôle ---------- */
 async function route() {
@@ -144,7 +222,7 @@ async function route() {
   const { data: { session } } = await db.auth.getSession();
   if (!session) return show("login");
 
-  const { data: p } = await db.from("profiles").select("nom,role,actif").eq("id", session.user.id).single();
+  const { data: p } = await db.from("profiles").select("nom,role,actif,modele").eq("id", session.user.id).single();
   if (!p) {
     await db.auth.signOut();
     show("login");
@@ -152,6 +230,7 @@ async function route() {
     return;
   }
   uid = session.user.id;
+  const who = p.nom + (p.modele ? " · Modèle : " + p.modele : "");
 
   if (p.role === "admin") {
     $("adminWho").textContent = p.nom;
@@ -161,12 +240,12 @@ async function route() {
     await loadHistory();
     timer = setInterval(() => { loadHistory(); loadPending(); }, 30000);
   } else if (!p.actif) {
-    $("agentWho").textContent = p.nom;
+    $("agentWho").textContent = who;
     show("agent");
     $("mine").textContent = "Votre compte est en attente de validation par l'administrateur.";
     timer = setInterval(route, 30000);
   } else {
-    $("agentWho").textContent = p.nom;
+    $("agentWho").textContent = who;
     show("agent");
     await loadMine();
     timer = setInterval(() => loadMine(true), 30000);
@@ -227,14 +306,32 @@ document.querySelectorAll(".logout").forEach(b => b.addEventListener("click", as
 
 /* ---------- Espace admin ---------- */
 async function loadAgents() {
-  const { data } = await db.from("profiles").select("id,nom").eq("role", "agent").eq("actif", true).order("nom");
+  const { data } = await db.from("profiles").select("id,nom,modele").eq("role", "agent").eq("actif", true).order("nom");
   agents = data || [];
-  $("target").replaceChildren(option("all", "Tous les agents"), ...agents.map(a => option(a.id, a.nom)));
-  $("filter").replaceChildren(option("", "Tous les agents"), ...agents.map(a => option(a.id, a.nom)));
+  const modeles = [...new Set(agents.map(a => (a.modele || "").trim()).filter(Boolean))].sort();
+  const label = a => a.nom + (a.modele ? " (" + a.modele + ")" : "");
+
+  const prev = $("target").value;
+  const children = [option("all", "Tous les agents")];
+  if (modeles.length) {
+    children.push(group("Par modèle", modeles.map(m => {
+      const n = agents.filter(a => a.modele === m).length;
+      return option("m:" + m, `Modèle : ${m} (${n} agent${n > 1 ? "s" : ""})`);
+    })));
+  }
+  children.push(group("Agents", agents.map(a => option(a.id, label(a)))));
+  $("target").replaceChildren(...children);
+  if ([...$("target").options].some(o => o.value === prev)) $("target").value = prev;
+
+  const fprev = $("filter").value;
+  $("filter").replaceChildren(option("", "Tous les agents"), ...agents.map(a => option(a.id, label(a))));
+  if ([...$("filter").options].some(o => o.value === fprev)) $("filter").value = fprev;
+
+  $("modeles").replaceChildren(...modeles.map(m => { const o = document.createElement("option"); o.value = m; return o; }));
 }
 
 async function loadPending() {
-  const { data } = await db.from("profiles").select("id,nom,actif").eq("role", "agent").order("actif").order("nom");
+  const { data } = await db.from("profiles").select("id,nom,actif,modele").eq("role", "agent").order("actif").order("nom");
   const list = $("pending");
   list.replaceChildren();
   $("pendingBox").hidden = !data || !data.length;
@@ -243,7 +340,7 @@ async function loadPending() {
     row.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0;flex-wrap:wrap";
 
     const left = document.createElement("div");
-    left.style.cssText = "display:flex;gap:10px;align-items:center";
+    left.style.cssText = "display:flex;gap:10px;align-items:center;flex-wrap:wrap";
     const n = document.createElement("span");
     n.textContent = p.nom;
     const tag = document.createElement("span");
@@ -252,8 +349,24 @@ async function loadPending() {
     left.append(n, tag);
 
     const actions = document.createElement("div");
-    actions.style.cssText = "display:flex;gap:8px";
+    actions.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap";
     const small = "width:auto;margin:0;padding:6px 14px";
+
+    // Modèle de l'agent (modifiable)
+    const mod = document.createElement("input");
+    mod.type = "text";
+    mod.placeholder = "Modèle";
+    mod.value = p.modele || "";
+    mod.setAttribute("list", "modeles");
+    mod.setAttribute("aria-label", "Modèle de " + p.nom);
+    mod.style.cssText = "width:140px;margin:0;padding:6px 10px";
+    mod.addEventListener("change", async () => {
+      const v = mod.value.trim() || null;
+      const { error } = await db.from("profiles").update({ modele: v }).eq("id", p.id);
+      if (error) { alert("Modification impossible : " + error.message); return; }
+      await loadAgents();
+    });
+    actions.appendChild(mod);
 
     if (!p.actif) {
       const ok = document.createElement("button");
@@ -286,9 +399,40 @@ async function loadPending() {
   });
 }
 
+
+/* ---------- Suppression (admin) ---------- */
+function delLink(text, handler) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "del";
+  b.textContent = text;
+  b.addEventListener("click", ev => { ev.stopPropagation(); handler(b); });
+  return b;
+}
+async function removeFiles(urls) {
+  const marker = "/" + BUCKET + "/";
+  const paths = urls.filter(Boolean).map(u => u.includes(marker) ? decodeURIComponent(u.split(marker)[1].split("?")[0]) : null).filter(Boolean);
+  if (paths.length) await db.storage.from(BUCKET).remove(paths); // erreur ignorée : le message est déjà supprimé
+}
+async function removeFeedback(f, reps) {
+  if (!confirm("Supprimer ce feedback et toutes ses réponses ?\nCette action est définitive.")) return;
+  await db.from("reponses").delete().eq("feedback_id", f.id);
+  const { data, error } = await db.from("feedbacks").delete().eq("id", f.id).select("id");
+  if (error || !data || !data.length) { alert("Suppression impossible" + (error ? " : " + error.message : " (droits manquants, voir le script SQL).")); return; }
+  await removeFiles([f.image_url, ...reps.map(r => r.image_url)]);
+  await loadHistory();
+}
+async function removeReply(r) {
+  if (!confirm("Supprimer cette réponse ?\nCette action est définitive.")) return;
+  const { data, error } = await db.from("reponses").delete().eq("id", r.id).select("id");
+  if (error || !data || !data.length) { alert("Suppression impossible" + (error ? " : " + error.message : " (droits manquants, voir le script SQL).")); return; }
+  await removeFiles([r.image_url]);
+  await loadHistory();
+}
+
 async function loadHistory() {
   let q = db.from("feedbacks")
-    .select("id,message,lu,created_at,agent:profiles!feedbacks_agent_id_fkey(nom),reponses(id,message,created_at,lu_admin)")
+    .select("id,message,image_url,modele,lu,created_at,agent:profiles!feedbacks_agent_id_fkey(nom),reponses(id,message,image_url,created_at,lu_admin)")
     .order("created_at", { ascending: false }).limit(100);
   if ($("filter").value) q = q.eq("agent_id", $("filter").value);
   const { data, error } = await q;
@@ -307,21 +451,27 @@ async function loadHistory() {
     newReplies += unreadReps.length;
 
     const tr = tbody.insertRow();
-    tr.insertCell().textContent = new Date(f.created_at).toLocaleString("fr-FR");
-    tr.insertCell().textContent = f.agent?.nom || "Inconnu";
+    tr.insertCell().textContent = fmt(f.created_at);
+
+    const ag = tr.insertCell();
+    ag.textContent = f.agent?.nom || "Inconnu";
+    if (f.modele) {
+      const mt = document.createElement("div");
+      mt.className = "tag model";
+      mt.style.cssText = "display:inline-block;margin-top:4px";
+      mt.textContent = f.modele;
+      ag.append(document.createElement("br"), mt);
+    }
+
     const m = tr.insertCell();
     m.className = "m";
-    m.textContent = f.message;
+    const fb = bubble("sent", "Vous · " + fmt(f.created_at), f.message, f.image_url);
+    fb.appendChild(delLink("Supprimer le feedback", () => removeFeedback(f, reps)));
+    m.appendChild(fb);
     reps.forEach(r => {
-      const d = document.createElement("div");
-      d.className = "reply";
-      const meta = document.createElement("div");
-      meta.className = "meta";
-      meta.textContent = "Réponse · " + new Date(r.created_at).toLocaleString("fr-FR");
-      const txt = document.createElement("div");
-      txt.textContent = r.message;
-      d.append(meta, txt);
-      m.appendChild(d);
+      const rb = bubble("recv", "Réponse · " + fmt(r.created_at), r.message, r.image_url);
+      rb.appendChild(delLink("Supprimer la réponse", () => removeReply(r)));
+      m.appendChild(rb);
     });
 
     const st = tr.insertCell();
@@ -346,17 +496,39 @@ async function loadHistory() {
   document.title = newReplies ? `(${newReplies}) Espace admin` : "Feedbacks";
 }
 
+bindPreview($("adminImg"), $("adminPrev"));
+
 $("sendBtn").addEventListener("click", async () => {
   const message = $("message").value.trim();
+  const file = $("adminImg").files[0];
   const out = $("sendMsg");
   out.className = "msg";
-  if (!message) { out.className = "msg err"; out.textContent = "Écrivez un message avant d'envoyer."; return; }
-  const ids = $("target").value === "all" ? agents.map(a => a.id) : [$("target").value];
-  const { error } = await db.from("feedbacks").insert(ids.map(id => ({ agent_id: id, auteur_id: uid, message })));
-  if (error) { out.className = "msg err"; out.textContent = "Échec de l'envoi : " + error.message; return; }
+  if (!message && !file) { out.className = "msg err"; out.textContent = "Écrivez un message ou ajoutez une image."; return; }
+
+  const sel = $("target").value;
+  const recipients = sel === "all" ? agents
+    : sel.startsWith("m:") ? agents.filter(a => a.modele === sel.slice(2))
+    : agents.filter(a => a.id === sel);
+  if (!recipients.length) { out.className = "msg err"; out.textContent = "Aucun destinataire."; return; }
+
+  $("sendBtn").disabled = true;
+  try {
+    const image_url = await uploadImage(file);
+    const { error } = await db.from("feedbacks").insert(
+      recipients.map(a => ({ agent_id: a.id, auteur_id: uid, message, image_url, modele: a.modele || null }))
+    );
+    if (error) throw new Error(error.message);
+  } catch (e) {
+    out.className = "msg err";
+    out.textContent = "Échec de l'envoi : " + e.message;
+    $("sendBtn").disabled = false;
+    return;
+  }
+  $("sendBtn").disabled = false;
   $("message").value = "";
+  clearFile($("adminImg"), $("adminPrev"));
   out.className = "msg ok";
-  out.textContent = ids.length > 1 ? `Feedback envoyé à ${ids.length} agents.` : "Feedback envoyé.";
+  out.textContent = recipients.length > 1 ? `Feedback envoyé à ${recipients.length} agents.` : "Feedback envoyé.";
   await loadHistory();
 });
 
@@ -374,6 +546,7 @@ $("addForm").addEventListener("submit", async e => {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: "tmp-signup" }
   });
   const nom = $("newNom").value.trim(), email = $("newEmail").value.trim();
+  const modele = $("newModele").value.trim() || null;
   const { data, error } = await tmp.auth.signUp({ email, password: $("newPass").value, options: { data: { nom } } });
 
   if (error) {
@@ -382,7 +555,7 @@ $("addForm").addEventListener("submit", async e => {
   if (!data.user || (data.user.identities && data.user.identities.length === 0)) {
     return fail("Cet email a déjà un compte.");
   }
-  const { error: upErr } = await db.from("profiles").update({ actif: true }).eq("id", data.user.id);
+  const { error: upErr } = await db.from("profiles").update({ actif: true, modele }).eq("id", data.user.id);
   if (upErr) return fail("Compte créé, mais l'activation a échoué : " + upErr.message);
 
   e.target.reset();
@@ -399,9 +572,10 @@ $("filter").addEventListener("change", loadHistory);
 async function loadMine(auto = false) {
   const list = $("mine");
   // Ne pas effacer une réponse en cours de saisie lors de l'actualisation automatique
-  if (auto && [...list.querySelectorAll("textarea")].some(t => t.value.trim() || t === document.activeElement)) return;
+  if (auto && ([...list.querySelectorAll("textarea")].some(t => t.value.trim() || t === document.activeElement)
+      || [...list.querySelectorAll("input[type=file]")].some(i => i.files.length))) return;
 
-  const { data, error } = await db.from("feedbacks").select("*,reponses(id,message,created_at)").eq("agent_id", uid)
+  const { data, error } = await db.from("feedbacks").select("*,reponses(id,message,image_url,created_at)").eq("agent_id", uid)
     .order("created_at", { ascending: false }).limit(50);
   list.replaceChildren();
   if (error) { list.textContent = "Impossible de charger vos feedbacks."; return; }
@@ -414,24 +588,24 @@ async function loadMine(auto = false) {
     const div = document.createElement("div");
     div.className = "fb" + (f.lu ? "" : " unread");
     div.tabIndex = 0;
+
     const meta = document.createElement("div");
     meta.className = "meta";
-    meta.textContent = new Date(f.created_at).toLocaleString("fr-FR") + (f.lu ? "" : " · cliquez pour marquer comme lu");
-    const body = document.createElement("div");
-    body.className = "body";
-    body.textContent = f.message;
-    div.append(meta, body);
+    const dt = document.createElement("span");
+    dt.textContent = fmt(f.created_at) + (f.lu ? "" : " · cliquez pour marquer comme lu");
+    meta.appendChild(dt);
+    if (f.modele) {
+      const mt = document.createElement("span");
+      mt.className = "tag model";
+      mt.textContent = "Modèle : " + f.modele;
+      meta.appendChild(mt);
+    }
+    div.appendChild(meta);
 
+    // Feedback reçu (gris) puis mes réponses (bleu)
+    div.appendChild(bubble("recv", "Reçu", f.message, f.image_url));
     (f.reponses || []).slice().sort((a, b) => a.created_at.localeCompare(b.created_at)).forEach(r => {
-      const d = document.createElement("div");
-      d.className = "reply";
-      const rm = document.createElement("div");
-      rm.className = "meta";
-      rm.textContent = "Votre réponse · " + new Date(r.created_at).toLocaleString("fr-FR");
-      const rt = document.createElement("div");
-      rt.textContent = r.message;
-      d.append(rm, rt);
-      div.appendChild(d);
+      div.appendChild(bubble("sent", "Votre réponse · " + fmt(r.created_at), r.message, r.image_url));
     });
 
     // Zone de réponse
@@ -445,20 +619,39 @@ async function loadMine(auto = false) {
     box.style.marginTop = "8px";
     const ta = document.createElement("textarea");
     ta.placeholder = "Votre réponse...";
+    const fileLbl = document.createElement("label");
+    fileLbl.textContent = "Image (optionnel)";
+    const fi = document.createElement("input");
+    fi.type = "file"; fi.accept = "image/*";
+    const prev = document.createElement("img");
+    prev.className = "preview"; prev.alt = "Aperçu"; prev.hidden = true;
+    bindPreview(fi, prev);
     const send = document.createElement("button");
     send.type = "button";
     send.textContent = "Envoyer la réponse";
-    box.append(ta, send);
+    const note = document.createElement("p");
+    note.className = "msg err";
+    box.append(ta, fileLbl, fi, prev, send, note);
     open.addEventListener("click", ev => { ev.stopPropagation(); box.hidden = !box.hidden; if (!box.hidden) ta.focus(); });
     box.addEventListener("click", ev => ev.stopPropagation());
     send.addEventListener("click", async ev => {
       ev.stopPropagation();
       const message = ta.value.trim();
-      if (!message) return;
+      const file = fi.files[0];
+      if (!message && !file) return;
       send.disabled = true;
-      const { error: err } = await db.from("reponses").insert({ feedback_id: f.id, auteur_id: uid, message });
-      if (err) { alert("Envoi impossible : " + err.message); send.disabled = false; return; }
+      note.textContent = "";
+      try {
+        const image_url = await uploadImage(file);
+        const { error: err } = await db.from("reponses").insert({ feedback_id: f.id, auteur_id: uid, message, image_url });
+        if (err) throw new Error(err.message);
+      } catch (e) {
+        note.textContent = "Envoi impossible : " + e.message;
+        send.disabled = false;
+        return;
+      }
       ta.value = "";
+      clearFile(fi, prev);
       await loadMine();
     });
     div.append(open, box);
