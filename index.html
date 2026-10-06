@@ -51,6 +51,16 @@
   .legend { font-size:12px; color:var(--muted); display:flex; gap:12px; margin:0 0 8px; }
   .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; }
   .preview { max-width:160px; max-height:120px; border-radius:6px; margin:0 0 12px; display:block; }
+  .user-row { display:grid; grid-template-columns:1.4fr 1.2fr .8fr .8fr auto; gap:8px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
+  .user-row:last-child { border-bottom:0; }
+  .user-row input, .user-row select, .user-row button { margin:0; }
+  .user-actions { display:flex; gap:6px; flex-wrap:wrap; }
+  .btn-danger { background:var(--alert); }
+  .btn-secondary { background:#475569; }
+  @media (max-width:700px) {
+    .user-row { grid-template-columns:1fr; }
+    .user-actions button { width:auto; }
+  }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -69,6 +79,10 @@
     <input id="email" type="email" autocomplete="username" required>
     <label for="password">Mot de passe</label>
     <input id="password" type="password" autocomplete="current-password" minlength="6" required>
+    <div id="confirmRow" hidden>
+      <label for="password2">Confirmer le mot de passe</label>
+      <input id="password2" type="password" autocomplete="new-password" minlength="6">
+    </div>
     <button id="loginBtn" type="submit">Se connecter</button>
     <p id="loginErr" class="msg err" role="alert"></p>
     <button type="button" id="modeBtn" class="ghost">Pas de compte ? Créer un compte</button>
@@ -97,8 +111,16 @@
     <datalist id="modeles"></datalist>
 
     <div id="pendingBox" hidden>
-      <h2>Agents</h2>
+      <h2>Demandes d'inscription</h2>
       <div id="pending" class="card"></div>
+    </div>
+
+    <h2>Gestion des utilisateurs</h2>
+    <div class="card">
+      <p class="muted" style="margin-top:0">
+        L'admin peut approuver/désactiver un compte et déterminer son rôle.
+      </p>
+      <div id="users"></div>
     </div>
 
     <h2>Envoyer un feedback</h2>
@@ -146,7 +168,7 @@ const MAX_IMG = 5 * 1024 * 1024; // 5 Mo
 
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const $ = id => document.getElementById(id);
-let uid = null, agents = [], timer = null;
+let uid = null, agents = [], timer = null, currentProfile = null;
 
 function show(name) {
   ["login", "admin", "agent"].forEach(n => { $(n).hidden = n !== name; });
@@ -222,7 +244,7 @@ async function route() {
   const { data: { session } } = await db.auth.getSession();
   if (!session) return show("login");
 
-  const { data: p } = await db.from("profiles").select("nom,role,actif,modele").eq("id", session.user.id).single();
+  const { data: p } = await db.from("profiles").select("nom,role,actif,modele,email").eq("id", session.user.id).single();
   if (!p) {
     await db.auth.signOut();
     show("login");
@@ -230,6 +252,7 @@ async function route() {
     return;
   }
   uid = session.user.id;
+  currentProfile = p;
   const who = p.nom + (p.modele ? " · Modèle : " + p.modele : "");
 
   if (p.role === "admin") {
@@ -237,12 +260,16 @@ async function route() {
     show("admin");
     await loadAgents();
     await loadPending();
+    await loadUsers();
     await loadHistory();
-    timer = setInterval(() => { loadHistory(); loadPending(); }, 30000);
+    timer = setInterval(() => { loadHistory(); loadPending(); loadUsers(); }, 30000);
   } else if (!p.actif) {
     $("agentWho").textContent = who;
     show("agent");
-    $("mine").textContent = "Votre compte est en attente de validation par l'administrateur.";
+    const msg = document.createElement("div");
+    msg.className = "card";
+    msg.innerHTML = "<strong>⏳ Compte en attente</strong><p class='muted'>Votre inscription a bien été enregistrée. Un administrateur doit approuver votre compte et choisir votre rôle avant l'accès à l'application.</p>";
+    $("mine").replaceChildren(msg);
     timer = setInterval(route, 30000);
   } else {
     $("agentWho").textContent = who;
@@ -257,6 +284,8 @@ function setMode(on) {
   signup = on;
   $("nomRow").hidden = !on;
   $("nom").required = on;
+  $("confirmRow").hidden = !on;
+  $("password2").required = on;
   $("loginTitle").textContent = on ? "Créer un compte" : "Connexion";
   $("loginBtn").textContent = on ? "Créer mon compte" : "Se connecter";
   $("modeBtn").textContent = on ? "Déjà un compte ? Se connecter" : "Pas de compte ? Créer un compte";
@@ -274,7 +303,21 @@ $("login").addEventListener("submit", async e => {
   const email = $("email").value.trim(), password = $("password").value;
 
   if (signup) {
-    const r = await db.auth.signUp({ email, password, options: { data: { nom: $("nom").value.trim() } } });
+    if (!$("nom").value.trim()) {
+      err.textContent = "Veuillez saisir votre nom complet.";
+      $("loginBtn").disabled = false;
+      return;
+    }
+    if (password !== $("password2").value) {
+      err.textContent = "Les deux mots de passe ne correspondent pas.";
+      $("loginBtn").disabled = false;
+      return;
+    }
+    const r = await db.auth.signUp({
+      email,
+      password,
+      options: { data: { nom: $("nom").value.trim() } }
+    });
     $("loginBtn").disabled = false;
     if (r.error) {
       err.textContent = /registered|already/i.test(r.error.message)
@@ -285,7 +328,7 @@ $("login").addEventListener("submit", async e => {
     if (!r.data.session) {
       setMode(false);
       err.className = "msg ok";
-      err.textContent = "Compte créé. Confirmez votre email, puis connectez-vous.";
+      err.textContent = "Compte créé. Confirmez votre email. Votre accès sera ensuite validé par un administrateur.";
       return;
     }
   } else {
@@ -294,6 +337,7 @@ $("login").addEventListener("submit", async e => {
     if (error) { err.textContent = "Email ou mot de passe incorrect."; return; }
   }
   $("password").value = "";
+  $("password2").value = "";
   await route();
 });
 
@@ -330,71 +374,225 @@ async function loadAgents() {
   $("modeles").replaceChildren(...modeles.map(m => { const o = document.createElement("option"); o.value = m; return o; }));
 }
 
-async function loadPending() {
-  const { data } = await db.from("profiles").select("id,nom,actif,modele").eq("role", "agent").order("actif").order("nom");
-  const list = $("pending");
-  list.replaceChildren();
-  $("pendingBox").hidden = !data || !data.length;
-  (data || []).forEach(p => {
-    const row = document.createElement("div");
-    row.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0;flex-wrap:wrap";
 
-    const left = document.createElement("div");
-    left.style.cssText = "display:flex;gap:10px;align-items:center;flex-wrap:wrap";
-    const n = document.createElement("span");
-    n.textContent = p.nom;
-    const tag = document.createElement("span");
-    tag.className = "tag " + (p.actif ? "read" : "unread");
-    tag.textContent = p.actif ? "Actif" : "En attente";
-    left.append(n, tag);
+async function adminRpc(name, args) {
+  const { data, error } = await db.rpc(name, args || {});
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+async function loadUsers() {
+  const { data, error } = await db
+    .from("profiles")
+    .select("id,nom,email,role,actif,modele,created_at")
+    .order("created_at", { ascending: false });
+
+  const box = $("users");
+  box.replaceChildren();
+
+  if (error) {
+    box.textContent = "Impossible de charger les utilisateurs : " + error.message;
+    return;
+  }
+
+  if (!data || !data.length) {
+    box.textContent = "Aucun utilisateur.";
+    return;
+  }
+
+  data.forEach(p => {
+    const row = document.createElement("div");
+    row.className = "user-row";
+
+    const identity = document.createElement("div");
+    const strong = document.createElement("strong");
+    strong.textContent = p.nom || "Sans nom";
+    const mail = document.createElement("div");
+    mail.className = "muted";
+    mail.textContent = p.email || "";
+    identity.append(strong, mail);
+
+    const model = document.createElement("input");
+    model.type = "text";
+    model.placeholder = "Modèle";
+    model.value = p.modele || "";
+
+    const role = document.createElement("select");
+    role.append(
+      option("agent", "Agent"),
+      option("admin", "Admin")
+    );
+    role.value = p.role;
+
+    const status = document.createElement("span");
+    status.className = "tag " + (p.actif ? "read" : "unread");
+    status.textContent = p.actif ? "Actif" : "En attente";
 
     const actions = document.createElement("div");
-    actions.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap";
-    const small = "width:auto;margin:0;padding:6px 14px";
+    actions.className = "user-actions";
 
-    // Modèle de l'agent (modifiable)
-    const mod = document.createElement("input");
-    mod.type = "text";
-    mod.placeholder = "Modèle";
-    mod.value = p.modele || "";
-    mod.setAttribute("list", "modeles");
-    mod.setAttribute("aria-label", "Modèle de " + p.nom);
-    mod.style.cssText = "width:140px;margin:0;padding:6px 10px";
-    mod.addEventListener("change", async () => {
-      const v = mod.value.trim() || null;
-      const { error } = await db.from("profiles").update({ modele: v }).eq("id", p.id);
-      if (error) { alert("Modification impossible : " + error.message); return; }
-      await loadAgents();
-    });
-    actions.appendChild(mod);
-
-    if (!p.actif) {
-      const ok = document.createElement("button");
-      ok.textContent = "Activer";
-      ok.style.cssText = small;
-      ok.addEventListener("click", async () => {
-        await db.from("profiles").update({ actif: true }).eq("id", p.id);
+    const save = document.createElement("button");
+    save.type = "button";
+    save.textContent = "Enregistrer";
+    save.style.width = "auto";
+    save.addEventListener("click", async () => {
+      save.disabled = true;
+      try {
+        await adminRpc("admin_update_profile", {
+          target_id: p.id,
+          new_role: role.value,
+          new_actif: p.actif,
+          new_modele: model.value.trim() || null
+        });
         await loadAgents();
         await loadPending();
-      });
-      actions.appendChild(ok);
-    }
+        await loadUsers();
+      } catch (e) {
+        alert("Modification impossible : " + e.message);
+        save.disabled = false;
+      }
+    });
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.textContent = p.actif ? "Désactiver" : "Approuver";
+    toggle.style.width = "auto";
+    toggle.className = p.actif ? "btn-secondary" : "";
+    toggle.addEventListener("click", async () => {
+      if (p.id === uid && p.actif) {
+        alert("Vous ne pouvez pas désactiver votre propre compte.");
+        return;
+      }
+      toggle.disabled = true;
+      try {
+        await adminRpc("admin_update_profile", {
+          target_id: p.id,
+          new_role: role.value,
+          new_actif: !p.actif,
+          new_modele: model.value.trim() || null
+        });
+        await loadAgents();
+        await loadPending();
+        await loadUsers();
+      } catch (e) {
+        alert("Opération impossible : " + e.message);
+        toggle.disabled = false;
+      }
+    });
 
     const del = document.createElement("button");
-    del.textContent = "Supprimer";
-    del.style.cssText = small + ";background:var(--alert)";
+    del.type = "button";
+    del.textContent = "Refuser / supprimer";
+    del.className = "btn-danger";
+    del.style.width = "auto";
     del.addEventListener("click", async () => {
-      if (!confirm(`Supprimer ${p.nom} ?\nSon compte et tous ses feedbacks seront effacés définitivement.`)) return;
+      if (p.id === uid) {
+        alert("Vous ne pouvez pas supprimer votre propre compte.");
+        return;
+      }
+      if (!confirm(`Supprimer définitivement ${p.nom || p.email} ?`)) return;
       del.disabled = true;
-      const { error } = await db.rpc("delete_agent", { target: p.id });
-      if (error) { alert("Suppression impossible : " + error.message); del.disabled = false; return; }
-      await loadAgents();
-      await loadPending();
-      await loadHistory();
+      try {
+        await adminRpc("admin_delete_user", { target_id: p.id });
+        await loadAgents();
+        await loadPending();
+        await loadUsers();
+        await loadHistory();
+      } catch (e) {
+        alert("Suppression impossible : " + e.message);
+        del.disabled = false;
+      }
     });
-    actions.appendChild(del);
 
-    row.append(left, actions);
+    actions.append(save, toggle, del);
+    row.append(identity, model, role, status, actions);
+    box.appendChild(row);
+  });
+}
+
+async function loadPending() {
+  const { data, error } = await db
+    .from("profiles")
+    .select("id,nom,email,actif,role,modele")
+    .eq("actif", false)
+    .order("created_at");
+
+  const list = $("pending");
+  list.replaceChildren();
+  $("pendingBox").hidden = !!error || !data || !data.length;
+
+  if (error) return;
+
+  (data || []).forEach(p => {
+    const row = document.createElement("div");
+    row.className = "user-row";
+
+    const identity = document.createElement("div");
+    const strong = document.createElement("strong");
+    strong.textContent = p.nom || "Sans nom";
+    const mail = document.createElement("div");
+    mail.className = "muted";
+    mail.textContent = p.email || "";
+    identity.append(strong, mail);
+
+    const model = document.createElement("input");
+    model.type = "text";
+    model.placeholder = "Modèle";
+    model.value = p.modele || "";
+
+    const role = document.createElement("select");
+    role.append(option("agent", "Agent"), option("admin", "Admin"));
+    role.value = p.role || "agent";
+
+    const status = document.createElement("span");
+    status.className = "tag unread";
+    status.textContent = "En attente";
+
+    const actions = document.createElement("div");
+    actions.className = "user-actions";
+
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.textContent = "Approuver";
+    approve.style.width = "auto";
+    approve.addEventListener("click", async () => {
+      approve.disabled = true;
+      try {
+        await adminRpc("admin_update_profile", {
+          target_id: p.id,
+          new_role: role.value,
+          new_actif: true,
+          new_modele: model.value.trim() || null
+        });
+        await loadAgents();
+        await loadPending();
+        await loadUsers();
+      } catch (e) {
+        alert("Approbation impossible : " + e.message);
+        approve.disabled = false;
+      }
+    });
+
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.textContent = "Refuser";
+    reject.className = "btn-danger";
+    reject.style.width = "auto";
+    reject.addEventListener("click", async () => {
+      if (!confirm(`Refuser et supprimer ${p.nom || p.email} ?`)) return;
+      reject.disabled = true;
+      try {
+        await adminRpc("admin_delete_user", { target_id: p.id });
+        await loadPending();
+        await loadUsers();
+      } catch (e) {
+        alert("Refus impossible : " + e.message);
+        reject.disabled = false;
+      }
+    });
+
+    actions.append(approve, reject);
+    row.append(identity, model, role, status, actions);
     list.appendChild(row);
   });
 }
@@ -555,8 +753,16 @@ $("addForm").addEventListener("submit", async e => {
   if (!data.user || (data.user.identities && data.user.identities.length === 0)) {
     return fail("Cet email a déjà un compte.");
   }
-  const { error: upErr } = await db.from("profiles").update({ actif: true, modele }).eq("id", data.user.id);
-  if (upErr) return fail("Compte créé, mais l'activation a échoué : " + upErr.message);
+  try {
+    await adminRpc("admin_update_profile", {
+      target_id: data.user.id,
+      new_role: "agent",
+      new_actif: true,
+      new_modele: modele
+    });
+  } catch (e) {
+    return fail("Compte créé, mais l'activation a échoué : " + e.message);
+  }
 
   e.target.reset();
   out.className = "msg ok";
