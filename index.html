@@ -52,6 +52,17 @@
   .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; }
   .preview { max-width:160px; max-height:120px; border-radius:6px; margin:0 0 12px; display:block; }
   [hidden] { display:none !important; }
+
+  .account-grid { display:grid; gap:10px; }
+  .account-row { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .account-row:last-child { border-bottom:0; }
+  .account-info { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .account-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .account-actions select, .account-actions button { width:auto; margin:0; padding:6px 10px; }
+  .tag.pending { background:#fef3c7; color:#92400e; }
+  .tag.email { background:#dbeafe; color:#1d4ed8; }
+  .tag.blocked { background:#fee2e2; color:#b91c1c; }
+  .admin-note { font-size:13px; color:var(--muted); margin:0 0 12px; }
 </style>
 </head>
 <body>
@@ -99,6 +110,15 @@
     <div id="pendingBox" hidden>
       <h2>Agents</h2>
       <div id="pending" class="card"></div>
+    </div>
+
+    <h2>Inscriptions et rôles</h2>
+    <div class="card">
+      <p class="admin-note">
+        Une inscription n'est activée que si l'adresse email est confirmée et qu'un administrateur l'a validée.
+        L'admin peut également modifier le rôle.
+      </p>
+      <div id="accounts" class="account-grid"></div>
     </div>
 
     <h2>Envoyer un feedback</h2>
@@ -222,7 +242,7 @@ async function route() {
   const { data: { session } } = await db.auth.getSession();
   if (!session) return show("login");
 
-  const { data: p } = await db.from("profiles").select("nom,role,actif,modele").eq("id", session.user.id).single();
+  const { data: p } = await db.from("profiles").select("nom,email,role,actif,modele,email_confirme").eq("id", session.user.id).single();
   if (!p) {
     await db.auth.signOut();
     show("login");
@@ -237,8 +257,14 @@ async function route() {
     show("admin");
     await loadAgents();
     await loadPending();
+    await loadAccounts();
     await loadHistory();
-    timer = setInterval(() => { loadHistory(); loadPending(); }, 30000);
+    timer = setInterval(() => { loadHistory(); loadPending(); loadAccounts(); }, 30000);
+  } else if (!p.email_confirme) {
+    $("agentWho").textContent = who;
+    show("agent");
+    $("mine").textContent = "Votre email n'est pas encore confirmé. Consultez votre boîte mail avant de demander l'activation.";
+    timer = setInterval(route, 30000);
   } else if (!p.actif) {
     $("agentWho").textContent = who;
     show("agent");
@@ -274,6 +300,11 @@ $("login").addEventListener("submit", async e => {
   const email = $("email").value.trim(), password = $("password").value;
 
   if (signup) {
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      err.textContent = "Veuillez utiliser une vraie adresse email valide.";
+      $("loginBtn").disabled = false;
+      return;
+    }
     const r = await db.auth.signUp({ email, password, options: { data: { nom: $("nom").value.trim() } } });
     $("loginBtn").disabled = false;
     if (r.error) {
@@ -330,6 +361,113 @@ async function loadAgents() {
   $("modeles").replaceChildren(...modeles.map(m => { const o = document.createElement("option"); o.value = m; return o; }));
 }
 
+async function loadAccounts() {
+  const box = $("accounts");
+  box.textContent = "Chargement...";
+  const { data, error } = await db.rpc("admin_list_accounts");
+  if (error) {
+    box.textContent = "Impossible de charger les inscriptions : " + error.message;
+    return;
+  }
+  box.replaceChildren();
+  if (!data || !data.length) {
+    box.textContent = "Aucune inscription.";
+    return;
+  }
+
+  data.forEach(p => {
+    const row = document.createElement("div");
+    row.className = "account-row";
+
+    const info = document.createElement("div");
+    info.className = "account-info";
+
+    const name = document.createElement("strong");
+    name.textContent = p.nom || "Sans nom";
+
+    const email = document.createElement("span");
+    email.className = "muted";
+    email.textContent = p.email || "Email inconnu";
+
+    const emailTag = document.createElement("span");
+    emailTag.className = "tag " + (p.email_confirme ? "email" : "pending");
+    emailTag.textContent = p.email_confirme ? "Email confirmé" : "Email non confirmé";
+
+    const status = document.createElement("span");
+    status.className = "tag " + (p.actif ? "read" : "unread");
+    status.textContent = p.actif ? "Validé" : "En attente";
+
+    info.append(name, email, emailTag, status);
+
+    const actions = document.createElement("div");
+    actions.className = "account-actions";
+
+    const role = document.createElement("select");
+    role.setAttribute("aria-label", "Rôle de " + (p.nom || p.email));
+    ["agent", "admin"].forEach(r => {
+      const o = option(r, r === "agent" ? "Agent" : "Administrateur");
+      if (r === p.role) o.selected = true;
+      role.appendChild(o);
+    });
+
+    role.addEventListener("change", async () => {
+      const { error } = await db.rpc("admin_set_role", { target_id: p.id, new_role: role.value });
+      if (error) {
+        alert("Modification du rôle impossible : " + error.message);
+        await loadAccounts();
+        return;
+      }
+      await loadAccounts();
+      await loadAgents();
+      await loadPending();
+    });
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.textContent = p.actif ? "Désactiver" : "Valider";
+    toggle.style.background = p.actif ? "var(--alert)" : "#15803d";
+    toggle.disabled = !p.email_confirme && !p.actif;
+
+    toggle.addEventListener("click", async () => {
+      if (!p.email_confirme && !p.actif) {
+        alert("Impossible de valider : l'adresse email n'est pas encore confirmée.");
+        return;
+      }
+      const { error } = await db.rpc("admin_set_active", { target_id: p.id, new_active: !p.actif });
+      if (error) {
+        alert("Modification impossible : " + error.message);
+        return;
+      }
+      await loadAccounts();
+      await loadAgents();
+      await loadPending();
+    });
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Supprimer";
+    del.style.background = "var(--alert)";
+    del.addEventListener("click", async () => {
+      if (!confirm(`Supprimer ${p.nom || p.email} ?\\nSon compte et ses données seront supprimés définitivement.`)) return;
+      del.disabled = true;
+      const { error } = await db.rpc("admin_delete_account", { target_id: p.id });
+      if (error) {
+        alert("Suppression impossible : " + error.message);
+        del.disabled = false;
+        return;
+      }
+      await loadAccounts();
+      await loadAgents();
+      await loadPending();
+      await loadHistory();
+    });
+
+    actions.append(role, toggle, del);
+    row.append(info, actions);
+    box.appendChild(row);
+  });
+}
+
 async function loadPending() {
   const { data } = await db.from("profiles").select("id,nom,actif,modele").eq("role", "agent").order("actif").order("nom");
   const list = $("pending");
@@ -373,9 +511,11 @@ async function loadPending() {
       ok.textContent = "Activer";
       ok.style.cssText = small;
       ok.addEventListener("click", async () => {
-        await db.from("profiles").update({ actif: true }).eq("id", p.id);
+        const { error } = await db.rpc("admin_set_active", { target_id: p.id, new_active: true });
+        if (error) { alert("Validation impossible : " + error.message); return; }
         await loadAgents();
         await loadPending();
+        await loadAccounts();
       });
       actions.appendChild(ok);
     }
@@ -545,8 +685,11 @@ $("addForm").addEventListener("submit", async e => {
   const tmp = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: "tmp-signup" }
   });
-  const nom = $("newNom").value.trim(), email = $("newEmail").value.trim();
+  const nom = $("newNom").value.trim(), email = $("newEmail").value.trim().toLowerCase();
   const modele = $("newModele").value.trim() || null;
+  if (!/^\S+@\S+\.\S+$/.test(email)) {
+    return fail("Veuillez saisir une vraie adresse email valide.");
+  }
   const { data, error } = await tmp.auth.signUp({ email, password: $("newPass").value, options: { data: { nom } } });
 
   if (error) {
@@ -555,12 +698,12 @@ $("addForm").addEventListener("submit", async e => {
   if (!data.user || (data.user.identities && data.user.identities.length === 0)) {
     return fail("Cet email a déjà un compte.");
   }
-  const { error: upErr } = await db.from("profiles").update({ actif: true, modele }).eq("id", data.user.id);
+  const { error: upErr } = await db.from("profiles").update({ actif: false, modele }).eq("id", data.user.id);
   if (upErr) return fail("Compte créé, mais l'activation a échoué : " + upErr.message);
 
   e.target.reset();
   out.className = "msg ok";
-  out.textContent = `Agent créé et activé (${email}). Transmettez-lui son email et son mot de passe.`;
+  out.textContent = `Compte créé (${email}). L'utilisateur doit confirmer son email, puis vous pourrez valider son inscription.`;
   $("addBtn").disabled = false;
   await loadAgents();
   await loadPending();
