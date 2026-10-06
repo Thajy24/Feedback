@@ -25,6 +25,7 @@
   .muted { color:var(--muted); }
   .msg { min-height:20px; font-size:13px; margin:0; }
   .err { color:var(--alert); } .ok { color:#15803d; }
+  #login { max-width:360px; margin:12vh auto 0; }
   .tablewrap { overflow-x:auto; }
   table { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); }
   th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
@@ -50,27 +51,34 @@
   .legend { font-size:12px; color:var(--muted); display:flex; gap:12px; margin:0 0 8px; }
   .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; }
   .preview { max-width:160px; max-height:120px; border-radius:6px; margin:0 0 12px; display:block; }
-  .user-row { display:grid; grid-template-columns:1.4fr 1.2fr .8fr .8fr auto; gap:8px; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); }
-  .user-row:last-child { border-bottom:0; }
-  .user-row input, .user-row select, .user-row button { margin:0; }
-  .user-actions { display:flex; gap:6px; flex-wrap:wrap; }
-  .btn-danger { background:var(--alert); }
-  .btn-secondary { background:#475569; }
-  @media (max-width:700px) {
-    .user-row { grid-template-columns:1fr; }
-    .user-actions button { width:auto; }
-  }
   [hidden] { display:none !important; }
 </style>
 </head>
 <body>
 <main>
 
+  <!-- CONNEXION -->
+  <form id="login" class="card" hidden>
+    <h1 id="loginTitle">Connexion</h1>
+    <p class="muted" style="margin:0 0 16px">Accédez à votre espace feedbacks.</p>
+    <div id="nomRow" hidden>
+      <label for="nom">Nom complet</label>
+      <input id="nom" type="text" autocomplete="name">
+    </div>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" required>
+    <label for="password">Mot de passe</label>
+    <input id="password" type="password" autocomplete="current-password" minlength="6" required>
+    <button id="loginBtn" type="submit">Se connecter</button>
+    <p id="loginErr" class="msg err" role="alert"></p>
+    <button type="button" id="modeBtn" class="ghost">Pas de compte ? Créer un compte</button>
+  </form>
+
   <!-- ESPACE ADMIN -->
   <section id="admin" hidden>
     <div class="top">
       <div><h1>Espace admin</h1><span id="adminWho" class="muted"></span></div>
-      <span class="muted">Accès admin automatique</span>
+      <button class="ghost logout">Se déconnecter</button>
     </div>
 
     <h2>Ajouter un agent</h2>
@@ -88,12 +96,9 @@
     </form>
     <datalist id="modeles"></datalist>
 
-    <h2>Gestion des utilisateurs</h2>
-    <div class="card">
-      <p class="muted" style="margin-top:0">
-        Les comptes créés par l'admin sont activés immédiatement. L'admin peut désactiver un compte et déterminer son rôle.
-      </p>
-      <div id="users"></div>
+    <div id="pendingBox" hidden>
+      <h2>Agents</h2>
+      <div id="pending" class="card"></div>
     </div>
 
     <h2>Envoyer un feedback</h2>
@@ -125,7 +130,7 @@
   <section id="agent" hidden>
     <div class="top">
       <div><h1>Mes feedbacks</h1><span id="agentWho" class="muted"></span></div>
-      <span class="muted">Accès admin automatique</span>
+      <button class="ghost logout">Se déconnecter</button>
     </div>
     <p class="legend"><span><i class="dot" style="background:var(--recv)"></i>Reçu</span><span><i class="dot" style="background:var(--accent)"></i>Envoyé par vous</span></p>
     <div id="mine"></div>
@@ -141,7 +146,7 @@ const MAX_IMG = 5 * 1024 * 1024; // 5 Mo
 
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const $ = id => document.getElementById(id);
-let uid = null, agents = [], timer = null, currentProfile = null;
+let uid = null, agents = [], timer = null;
 
 function show(name) {
   ["login", "admin", "agent"].forEach(n => { $(n).hidden = n !== name; });
@@ -210,89 +215,94 @@ function bubble(kind, metaText, text, imageUrl) {
   return b;
 }
 
-/* ---------- Accès automatique à l'espace admin ---------- */
-async function ensureAdminSession() {
-  let { data: { session } } = await db.auth.getSession();
-
-  // Pas d'écran de connexion : on utilise une session anonyme persistante.
-  if (!session) {
-    const r = await db.auth.signInAnonymously();
-    if (r.error) throw new Error(
-      "Impossible d'activer l'accès automatique. Activez Anonymous Sign-Ins dans Supabase : " + r.error.message
-    );
-    session = r.data.session;
-  }
-
-  uid = session.user.id;
-
-  // Création automatique du profil admin, actif immédiatement, sans approbation.
-  const { data: existing, error: readError } = await db
-    .from("profiles")
-    .select("id,nom,role,actif,modele,email")
-    .eq("id", uid)
-    .maybeSingle();
-
-  if (readError) throw new Error("Impossible de lire le profil admin : " + readError.message);
-
-  if (!existing) {
-    const { data: created, error: createError } = await db
-      .from("profiles")
-      .insert({
-        id: uid,
-        nom: "Administrateur",
-        email: "admin@local",
-        role: "admin",
-        actif: true,
-        modele: null
-      })
-      .select("id,nom,role,actif,modele,email")
-      .single();
-
-    if (createError) throw new Error(
-      "Création automatique du profil admin impossible : " + createError.message
-    );
-    currentProfile = created;
-  } else {
-    // Une session anonyme déjà connue reste admin et active.
-    const { data: updated, error: updateError } = await db
-      .from("profiles")
-      .update({ role: "admin", actif: true })
-      .eq("id", uid)
-      .select("id,nom,role,actif,modele,email")
-      .single();
-
-    if (updateError) throw new Error("Activation automatique du profil admin impossible : " + updateError.message);
-    currentProfile = updated;
-  }
-}
-
+/* ---------- Connexion et aiguillage selon le rôle ---------- */
 async function route() {
   clearInterval(timer);
   document.title = "Feedbacks";
+  const { data: { session } } = await db.auth.getSession();
+  if (!session) return show("login");
 
-  try {
-    await ensureAdminSession();
+  const { data: p } = await db.from("profiles").select("nom,role,actif,modele").eq("id", session.user.id).single();
+  if (!p) {
+    await db.auth.signOut();
+    show("login");
+    $("loginErr").textContent = "Ce compte n'a pas de profil. Contactez l'administrateur.";
+    return;
+  }
+  uid = session.user.id;
+  const who = p.nom + (p.modele ? " · Modèle : " + p.modele : "");
 
-    const p = currentProfile;
-    $("adminWho").textContent = p.nom || "Administrateur";
+  if (p.role === "admin") {
+    $("adminWho").textContent = p.nom;
     show("admin");
-
     await loadAgents();
-    await loadUsers();
+    await loadPending();
     await loadHistory();
-
-    timer = setInterval(() => {
-      loadHistory();
-      loadUsers();
-      loadAgents();
-    }, 30000);
-  } catch (e) {
-    console.error(e);
-    show("admin");
-    $("adminWho").textContent = "Erreur d'accès";
-    alert(e.message);
+    timer = setInterval(() => { loadHistory(); loadPending(); }, 30000);
+  } else if (!p.actif) {
+    $("agentWho").textContent = who;
+    show("agent");
+    $("mine").textContent = "Votre compte est en attente de validation par l'administrateur.";
+    timer = setInterval(route, 30000);
+  } else {
+    $("agentWho").textContent = who;
+    show("agent");
+    await loadMine();
+    timer = setInterval(() => loadMine(true), 30000);
   }
 }
+
+let signup = false;
+function setMode(on) {
+  signup = on;
+  $("nomRow").hidden = !on;
+  $("nom").required = on;
+  $("loginTitle").textContent = on ? "Créer un compte" : "Connexion";
+  $("loginBtn").textContent = on ? "Créer mon compte" : "Se connecter";
+  $("modeBtn").textContent = on ? "Déjà un compte ? Se connecter" : "Pas de compte ? Créer un compte";
+  $("password").autocomplete = on ? "new-password" : "current-password";
+  $("loginErr").textContent = "";
+}
+$("modeBtn").addEventListener("click", () => setMode(!signup));
+
+$("login").addEventListener("submit", async e => {
+  e.preventDefault();
+  const err = $("loginErr");
+  err.className = "msg err";
+  err.textContent = "";
+  $("loginBtn").disabled = true;
+  const email = $("email").value.trim(), password = $("password").value;
+
+  if (signup) {
+    const r = await db.auth.signUp({ email, password, options: { data: { nom: $("nom").value.trim() } } });
+    $("loginBtn").disabled = false;
+    if (r.error) {
+      err.textContent = /registered|already/i.test(r.error.message)
+        ? "Cet email a déjà un compte."
+        : "Création impossible : " + r.error.message;
+      return;
+    }
+    if (!r.data.session) {
+      setMode(false);
+      err.className = "msg ok";
+      err.textContent = "Compte créé. Confirmez votre email, puis connectez-vous.";
+      return;
+    }
+  } else {
+    const { error } = await db.auth.signInWithPassword({ email, password });
+    $("loginBtn").disabled = false;
+    if (error) { err.textContent = "Email ou mot de passe incorrect."; return; }
+  }
+  $("password").value = "";
+  await route();
+});
+
+document.querySelectorAll(".logout").forEach(b => b.addEventListener("click", async () => {
+  clearInterval(timer);
+  await db.auth.signOut();
+  show("login");
+  document.title = "Feedbacks";
+}));
 
 /* ---------- Espace admin ---------- */
 async function loadAgents() {
@@ -320,138 +330,75 @@ async function loadAgents() {
   $("modeles").replaceChildren(...modeles.map(m => { const o = document.createElement("option"); o.value = m; return o; }));
 }
 
-
-async function adminRpc(name, args) {
-  const { data, error } = await db.rpc(name, args || {});
-  if (error) throw new Error(error.message);
-  return data;
-}
-
-async function loadUsers() {
-  const { data, error } = await db
-    .from("profiles")
-    .select("id,nom,email,role,actif,modele,created_at")
-    .order("created_at", { ascending: false });
-
-  const box = $("users");
-  box.replaceChildren();
-
-  if (error) {
-    box.textContent = "Impossible de charger les utilisateurs : " + error.message;
-    return;
-  }
-
-  if (!data || !data.length) {
-    box.textContent = "Aucun utilisateur.";
-    return;
-  }
-
-  data.forEach(p => {
+async function loadPending() {
+  const { data } = await db.from("profiles").select("id,nom,actif,modele").eq("role", "agent").order("actif").order("nom");
+  const list = $("pending");
+  list.replaceChildren();
+  $("pendingBox").hidden = !data || !data.length;
+  (data || []).forEach(p => {
     const row = document.createElement("div");
-    row.className = "user-row";
+    row.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0;flex-wrap:wrap";
 
-    const identity = document.createElement("div");
-    const strong = document.createElement("strong");
-    strong.textContent = p.nom || "Sans nom";
-    const mail = document.createElement("div");
-    mail.className = "muted";
-    mail.textContent = p.email || "";
-    identity.append(strong, mail);
-
-    const model = document.createElement("input");
-    model.type = "text";
-    model.placeholder = "Modèle";
-    model.value = p.modele || "";
-
-    const role = document.createElement("select");
-    role.append(
-      option("agent", "Agent"),
-      option("admin", "Admin")
-    );
-    role.value = p.role;
-
-    const status = document.createElement("span");
-    status.className = "tag " + (p.actif ? "read" : "unread");
-    status.textContent = p.actif ? "Actif" : "En attente";
+    const left = document.createElement("div");
+    left.style.cssText = "display:flex;gap:10px;align-items:center;flex-wrap:wrap";
+    const n = document.createElement("span");
+    n.textContent = p.nom;
+    const tag = document.createElement("span");
+    tag.className = "tag " + (p.actif ? "read" : "unread");
+    tag.textContent = p.actif ? "Actif" : "En attente";
+    left.append(n, tag);
 
     const actions = document.createElement("div");
-    actions.className = "user-actions";
+    actions.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap";
+    const small = "width:auto;margin:0;padding:6px 14px";
 
-    const save = document.createElement("button");
-    save.type = "button";
-    save.textContent = "Enregistrer";
-    save.style.width = "auto";
-    save.addEventListener("click", async () => {
-      save.disabled = true;
-      try {
-        await adminRpc("admin_update_profile", {
-          target_id: p.id,
-          new_role: role.value,
-          new_actif: p.actif,
-          new_modele: model.value.trim() || null
-        });
-        await loadAgents();
-            await loadUsers();
-      } catch (e) {
-        alert("Modification impossible : " + e.message);
-        save.disabled = false;
-      }
+    // Modèle de l'agent (modifiable)
+    const mod = document.createElement("input");
+    mod.type = "text";
+    mod.placeholder = "Modèle";
+    mod.value = p.modele || "";
+    mod.setAttribute("list", "modeles");
+    mod.setAttribute("aria-label", "Modèle de " + p.nom);
+    mod.style.cssText = "width:140px;margin:0;padding:6px 10px";
+    mod.addEventListener("change", async () => {
+      const v = mod.value.trim() || null;
+      const { error } = await db.from("profiles").update({ modele: v }).eq("id", p.id);
+      if (error) { alert("Modification impossible : " + error.message); return; }
+      await loadAgents();
     });
+    actions.appendChild(mod);
 
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.textContent = p.actif ? "Désactiver" : "Approuver";
-    toggle.style.width = "auto";
-    toggle.className = p.actif ? "btn-secondary" : "";
-    toggle.addEventListener("click", async () => {
-      if (p.id === uid && p.actif) {
-        alert("Vous ne pouvez pas désactiver votre propre compte.");
-        return;
-      }
-      toggle.disabled = true;
-      try {
-        await adminRpc("admin_update_profile", {
-          target_id: p.id,
-          new_role: role.value,
-          new_actif: !p.actif,
-          new_modele: model.value.trim() || null
-        });
+    if (!p.actif) {
+      const ok = document.createElement("button");
+      ok.textContent = "Activer";
+      ok.style.cssText = small;
+      ok.addEventListener("click", async () => {
+        await db.from("profiles").update({ actif: true }).eq("id", p.id);
         await loadAgents();
-            await loadUsers();
-      } catch (e) {
-        alert("Opération impossible : " + e.message);
-        toggle.disabled = false;
-      }
-    });
+        await loadPending();
+      });
+      actions.appendChild(ok);
+    }
 
     const del = document.createElement("button");
-    del.type = "button";
-    del.textContent = "Refuser / supprimer";
-    del.className = "btn-danger";
-    del.style.width = "auto";
+    del.textContent = "Supprimer";
+    del.style.cssText = small + ";background:var(--alert)";
     del.addEventListener("click", async () => {
-      if (p.id === uid) {
-        alert("Vous ne pouvez pas supprimer votre propre compte.");
-        return;
-      }
-      if (!confirm(`Supprimer définitivement ${p.nom || p.email} ?`)) return;
+      if (!confirm(`Supprimer ${p.nom} ?\nSon compte et tous ses feedbacks seront effacés définitivement.`)) return;
       del.disabled = true;
-      try {
-        await adminRpc("admin_delete_user", { target_id: p.id });
-        await loadAgents();
-            await loadUsers();
-        await loadHistory();
-      } catch (e) {
-        alert("Suppression impossible : " + e.message);
-        del.disabled = false;
-      }
+      const { error } = await db.rpc("delete_agent", { target: p.id });
+      if (error) { alert("Suppression impossible : " + error.message); del.disabled = false; return; }
+      await loadAgents();
+      await loadPending();
+      await loadHistory();
     });
+    actions.appendChild(del);
 
-    actions.append(save, toggle, del);
-    row.append(identity, model, role, status, actions);
-    box.appendChild(row);
+    row.append(left, actions);
+    list.appendChild(row);
   });
 }
+
 
 /* ---------- Suppression (admin) ---------- */
 function delLink(text, handler) {
@@ -589,64 +536,34 @@ $("sendBtn").addEventListener("click", async () => {
 $("addForm").addEventListener("submit", async e => {
   e.preventDefault();
   const out = $("addMsg");
-  const fail = text => {
-    out.className = "msg err";
-    out.textContent = text;
-    $("addBtn").disabled = false;
-  };
-
+  const fail = text => { out.className = "msg err"; out.textContent = text; $("addBtn").disabled = false; };
   out.className = "msg";
   out.textContent = "";
   $("addBtn").disabled = true;
 
-  const nom = $("newNom").value.trim();
-  const email = $("newEmail").value.trim();
-  const modele = $("newModele").value.trim() || null;
-  const password = $("newPass").value;
-
-  // Création du compte agent sans approbation : actif immédiatement.
+  // Client temporaire sans session : la connexion de l'admin n'est pas touchée
   const tmp = supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-      storageKey: "tmp-signup"
-    }
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: "tmp-signup" }
   });
-
-  const { data, error } = await tmp.auth.signUp({
-    email,
-    password,
-    options: { data: { nom } }
-  });
+  const nom = $("newNom").value.trim(), email = $("newEmail").value.trim();
+  const modele = $("newModele").value.trim() || null;
+  const { data, error } = await tmp.auth.signUp({ email, password: $("newPass").value, options: { data: { nom } } });
 
   if (error) {
-    return fail(/registered|already/i.test(error.message)
-      ? "Cet email a déjà un compte."
-      : "Création impossible : " + error.message);
+    return fail(/registered|already/i.test(error.message) ? "Cet email a déjà un compte." : "Création impossible : " + error.message);
   }
-
   if (!data.user || (data.user.identities && data.user.identities.length === 0)) {
     return fail("Cet email a déjà un compte.");
   }
-
-  try {
-    await adminRpc("admin_update_profile", {
-      target_id: data.user.id,
-      new_role: "agent",
-      new_actif: true,
-      new_modele: modele
-    });
-  } catch (e) {
-    return fail("Compte créé, mais l'activation a échoué : " + e.message);
-  }
+  const { error: upErr } = await db.from("profiles").update({ actif: true, modele }).eq("id", data.user.id);
+  if (upErr) return fail("Compte créé, mais l'activation a échoué : " + upErr.message);
 
   e.target.reset();
   out.className = "msg ok";
-  out.textContent = `Agent créé et activé immédiatement (${email}).`;
+  out.textContent = `Agent créé et activé (${email}). Transmettez-lui son email et son mot de passe.`;
   $("addBtn").disabled = false;
   await loadAgents();
-  await loadUsers();
+  await loadPending();
 });
 
 $("filter").addEventListener("change", loadHistory);
